@@ -5,6 +5,21 @@ import sys
 from random import randint
 import numpy as np
 
+
+square_size = 30  # Length of the square's side
+square_color = (0, 0, 255)  # Red color
+thickness = 2  # Thickness of the square's outline
+transparency = 0.5  # Transparency of the square
+
+def add_transparent_square(image, center):
+    overlay = image.copy()
+    top_left = (center[0] - square_size // 2, center[1] - square_size // 2)
+    bottom_right = (center[0] + square_size // 2, center[1] + square_size // 2)
+    cv2.rectangle(overlay, top_left, bottom_right, square_color, -1)
+
+    # Blend the overlay with the original image
+    return cv2.addWeighted(overlay, transparency, image, 1 - transparency, 0)
+
 # Create main function that takes the path to the video as input
 def main(video_path):
     cap = cv2.VideoCapture(video_path)
@@ -38,6 +53,7 @@ def main(video_path):
     cv2.imshow('frame', frame)
     out.write(frame)
 
+    trajectory = []
     # For each frame, detect the objects and predict the next state then update the state
     while cap.isOpened():
         success, frame = cap.read()
@@ -53,13 +69,28 @@ def main(video_path):
         cv2.circle(frame, center, 5, (0, 255, 0), -1)
 
         kf.predict()
-        kf.update(center)
         predicted_center = tuple(int(val) for val in kf.x[:2, 0].A1)
-        cv2.circle(frame, predicted_center, 5, (0, 0, 255), -1)
+        top_left_predicted = (predicted_center[0] - square_size // 2, predicted_center[1] - square_size // 2)
+        bottom_right_predicted = (predicted_center[0] + square_size // 2, predicted_center[1] + square_size // 2)
+        # Draw a blue rectangle for the predicted position
+        cv2.rectangle(frame, top_left_predicted, bottom_right_predicted, (255, 0, 0), thickness)
+        
+        
+        kf.update(center)
+        estimated_center = tuple(int(val) for val in kf.x[:2, 0].A1)
+        top_left_estimated = (estimated_center[0] - square_size // 2, estimated_center[1] - square_size // 2)
+        bottom_right_estimated = (estimated_center[0] + square_size // 2, estimated_center[1] + square_size // 2)
+
+        # Draw a red rectangle for the estimated position
+        cv2.rectangle(frame, top_left_estimated, bottom_right_estimated, (0, 0, 255), thickness)
+        
+        # Draw the trajectory
+        trajectory.append(estimated_center)
+        for i in range(1, len(trajectory)):
+            cv2.line(frame, trajectory[i - 1], trajectory[i], (0, 255, 255), 2)
+        
         out.write(frame)
         cv2.imshow('frame', frame)
-
-        
         if cv2.waitKey(delay) & 0xFF == ord('q'):
             break
 
