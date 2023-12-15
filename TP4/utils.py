@@ -80,16 +80,23 @@ def associate_detections_to_tracks(similarity_matrix, sigma_iou):
     return matches, unmatched_detections, unmatched_tracks
 
 def initialize_new_track(det, conf, frame_number):
+    """
+        Initialize a new track.
+        Parameters:
+            det: detection
+            conf: confidence of the detection
+            frame_number: current frame number
+    """
     global next_track_id
     kf = KalmanFilter()
-    kf.x = np.matrix([[det[0] + det[2] / 2], [det[1] + det[3] / 2], [0], [0]])  # Initialize state
+    kf.x = np.matrix([[det[0] + det[2] / 2], [det[1] + det[3] / 2], [0], [0]])
     new_track = {
         'id': next_track_id,
         'box': det,
         'conf': conf,
         'frames': [frame_number],
         'positions': [(int(det[0] + det[2] / 2), int(det[1] + det[3] / 2))],
-        'kf': kf  # Kalman Filter instance
+        'kf': kf
     }
     next_track_id += 1
     return new_track
@@ -105,6 +112,17 @@ def update_track(track, det, conf, frame_number):
     track['conf'] = conf
 
 def update_tracks(matches, unmatched_tracks, unmatched_detections, current_detections, current_confidences, previous_tracks, frame_number):
+    """
+        Update the tracks based on the matches and unmatched detections.
+        Parameters:
+            matches: list of matched detections and tracks
+            unmatched_tracks: list of unmatched tracks
+            unmatched_detections: list of unmatched detections
+            current_detections: list of current detections
+            current_confidences: list of confidences for the current detections
+            previous_tracks: list of previous tracks
+            frame_number: current frame number
+    """
     global next_track_id
 
     # Update matched tracks with new detections
