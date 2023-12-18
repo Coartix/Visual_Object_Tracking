@@ -1,44 +1,19 @@
-# Object Tracking Project
+# Object Tracking Project Update
 
-## Overview
-This project implements an advanced object tracking system using Intersection over Union (IoU) and the Hungarian algorithm. It processes a sequence of images, precisely tracks objects based on their bounding boxes, and visualizes their movement over time.
+## Enhanced Object Matching with ResNet and Color Features
+This update introduces significant enhancements to the existing object tracking system. We've integrated deep learning and color-based features to improve object matching, especially in situations where traditional Intersection over Union (IoU) might be insufficient. 
 
-## Features
-- **IoU-Based Tracking with Hungarian Algorithm**: Enhances tracking accuracy by optimally associating detections to tracks using the Hungarian algorithm, which improves assignment efficiency in complex scenarios.
-- **Unique ID Assignment**: Maintains consistent IDs for each tracked object, even in challenging situations like occlusions or closely moving objects.
-- **Confidence Score Display**: Shows the detection confidence score for each object, providing insight into the detection reliability.
-- **Trajectory Visualization**: Draws the path of each object, illustrating its movement throughout the sequence of frames.
-- **Video Output with Enhanced Tracking**: Generates a video that showcases the advanced tracking capabilities with annotations.
+### Key Enhancements
+- **Deep Learning-Based Matching**: Leverages a pre-trained ResNet model to extract deep features from the detected objects. This enables more robust matching based on object appearances, going beyond mere spatial overlap measured by IoU.
+- **Color Feature Matching**: Incorporates color histogram analysis, allowing the system to compare objects based on color distribution, which is particularly useful when objects have similar shapes but different color patterns.
+- **Complementary to IoU**: These new matching criteria are used alongside IoU, providing a more nuanced and effective approach, especially in complex tracking scenarios where IoU alone might struggle.
 
-## Prerequisites
-- Python 3.x
-- OpenCV
-- NumPy
-- Pandas
-- SciPy (for the Hungarian algorithm)
+### Performance Considerations
+- **Increased Computational Load**: The introduction of deep learning and color feature analysis significantly increases the computational demands of the system. This results in slower processing times but leads to more accurate and reliable tracking deductions.
+- **Balancing Accuracy and Speed**: Users should be aware of the trade-off between the enhanced accuracy provided by these features and the increased computational requirements.
 
-## Usage
-1. Place your sequence of images in a directory (e.g., `data/img1/`).
-2. Prepare a detections file (`det.txt`) in the specified format.
-3. Run the main script to process the images and apply the enhanced tracking algorithm.
-4. View the real-time tracking results and find the generated video file (`output_with_tracking.mp4`).
+### Usage and Output
+The overall usage remains the same, but users should expect longer processing times due to the additional feature extraction steps. The output now includes more sophisticated tracking data, reflecting the improved object matching capabilities.
 
-## Input Data Format
-The detections file (`det.txt`) should include:
-- `frame`: Frame number.
-- `id`: Object ID (initial frame initialization).
-- `bb_left`, `bb_top`, `bb_width`, `bb_height`: Bounding box coordinates.
-- `conf`: Detection confidence score.
-- `x`, `y`, `z`: World coordinates (unused in this 2D challenge).
-
-## Output
-- **Video File**: `output_with_tracking.mp4`, displaying tracked objects, IDs, confidence scores, bounding boxes, and trajectories.
-- **Tracking File**: A text file containing tracking results in a format similar to the ground truth, updated with unique IDs assigned to each track, enhancing data analysis and verification.
-
-# Changes from TP2  
-
-## Enhancements with the Hungarian Algorithm
-The integration of the Hungarian algorithm significantly improves the tracking accuracy, especially in scenes with multiple moving objects. By optimizing detection-to-track associations, it reduces ID switch errors and enhances the overall robustness of the tracking system.
-
-## Tracking File for Analysis
-The system generates a detailed tracking file, which is invaluable for post-analysis, allowing for a thorough examination of the tracking performance and object behavior throughout the video.
+## Conclusion
+By integrating ResNet-based deep learning features and color histogram analysis, this update substantially advances the object tracking capabilities of the system, particularly in challenging scenarios where traditional methods fall short. While this enhancement comes at the cost of increased processing time, it offers a significant boost in tracking accuracy and reliability.
