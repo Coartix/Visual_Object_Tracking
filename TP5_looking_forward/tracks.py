@@ -190,9 +190,11 @@ def look_forward(det_df,
                     for track in tracks_history[tracks_idx]:
                         track['kf'].predict()
                 
-                tracks = tracks_history[i - 1]
+                tracks = deepcopy(tracks_history[i - 1])
                 for j in range(frame_number, i):
-                    tracks.extend(tracks_history[j])
+                    for track in tracks_history[j]:
+                        tracks.append(track)
+                
                 similarity_matrix = create_similarity_matrix(current_boxes, tracks)
                 print(f"frame {i}: {similarity_matrix.shape}, current_boxes x tracks")
                 # print(similarity_matrix)
@@ -202,7 +204,7 @@ def look_forward(det_df,
                                                   unmatched_detections,
                                                   current_boxes,
                                                   current_confidences,
-                                                  tracks_history[i - 1],
+                                                  tracks,
                                                   i)
 
     else:
@@ -217,9 +219,11 @@ def look_forward(det_df,
             for track in tracks_history[tracks_idx]:
                 track['kf'].predict()
 
-        tracks = tracks_history[last_track_idx]        
+        tracks = deepcopy(tracks_history[last_track_idx])     
         for j in range(frame_number, frame_number + nb_step - 1):
-            tracks.extend(tracks_history[j])
+            for track in tracks_history[j]:
+                tracks.append(track)
+
         similarity_matrix = create_similarity_matrix(current_boxes, tracks)
         print(f"frame {frame_number + nb_step - 1}: {similarity_matrix.shape}, current_boxes x tracks")
         matches, unmatched_detections, unmatched_tracks = associate_detections_to_tracks(similarity_matrix, sigma_iou)
@@ -229,8 +233,7 @@ def look_forward(det_df,
                                                                    unmatched_detections,
                                                                    current_boxes,
                                                                    current_confidences,
-                                                                   tracks_history[last_track_idx],
+                                                                   tracks,
                                                                    frame_number + nb_step - 1)
-        
     
     return tracks_history
