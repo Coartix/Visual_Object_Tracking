@@ -4,8 +4,10 @@ import numpy as np
 import cv2
 from scipy.optimize import linear_sum_assignment
 from KalmanFilter import KalmanFilter
+from copy import deepcopy
 
 next_track_id = 1
+
 
 def load_detections(det_file_path):
     """
@@ -46,6 +48,12 @@ def get_predicted_box(kf, w, h):
     return [x_center - w / 2, y_center - h / 2, w, h]
 
 def create_similarity_matrix(current_detections, previous_tracks):
+    """
+        Create the similarity matrix between the current detections and the previous tracks.
+        Parameters:
+            current_detections: list of current detections
+            previous_tracks: list of previous tracks
+    """
     similarity_matrix = np.zeros((len(current_detections), len(previous_tracks)))
     for i, current_det in enumerate(current_detections):
         for j, previous_track in enumerate(previous_tracks):
@@ -57,8 +65,7 @@ def associate_detections_to_tracks(similarity_matrix, sigma_iou):
     """
         Associate the detections to the tracks.
         Parameters:
-            similarity_matrix: similarity matrix between the current detections and the previous tracks
-            sigma_iou: IoU threshold
+            similarity_matrix: similarity matrix between the current detections and the previous tracks            sigma_iou: IoU threshold
     """
     if similarity_matrix.size == 0:
         return [], list(range(similarity_matrix.shape[0])), list(range(similarity_matrix.shape[1]))
@@ -66,6 +73,7 @@ def associate_detections_to_tracks(similarity_matrix, sigma_iou):
     # Convert IoU similarity matrix to a cost matrix for the Hungarian algorithm
     cost_matrix = 1 - similarity_matrix
     det_indices, track_indices = linear_sum_assignment(cost_matrix)
+    print(f"det_indices: {len(det_indices)}, track_indices: {len(track_indices)}")
 
     matches = []
     unmatched_detections = list(range(similarity_matrix.shape[0]))
@@ -111,13 +119,7 @@ def update_track(track, det, conf, frame_number):
     track['positions'].append((int(estimated_pos[0, 0]), int(estimated_pos[1, 0])))
     track['conf'] = conf
 
-def update_tracks(matches,
-                  unmatched_tracks,
-                  unmatched_detections,
-                  current_detections,
-                  current_confidences,
-                  previous_tracks,
-                  frame_number):
+def update_tracks(matches, unmatched_tracks, unmatched_detections, current_detections, current_confidences, previous_tracks, frame_number):
     """
         Update the tracks based on the matches and unmatched detections.
         Parameters:
@@ -147,40 +149,88 @@ def update_tracks(matches,
 
     return previous_tracks
 
-def draw_tracking_result(frame, tracks):
+def look_forward(det_df,
+                 tracks_history,
+                 frame_number,
+                 nb_step = 10,
+                 sigma_iou = 0.3,
+                 conf_threshold = 20.0):
     """
-        Draw the tracking result on the frame.
-        Parameters:
-            frame: current frame
-            tracks: list of tracks
-    """
-    for track in tracks:
-        # Draw bounding box and ID
-        x, y, w, h = track['box']
-        conf = track['conf']
-        cv2.rectangle(frame, (int(x), int(y)), (int(x + w), int(y + h)), (0, 255, 255), 2)
-        label = f'ID: {track["id"]}, Conf: {conf:.2f}'
-        cv2.putText(frame, label, (int(x), int(y)), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 255), 2, cv2.LINE_AA)
+        Perform tracking on the given detection file, the goal of looking forward
+        is to predict the position of the detected objects in the future and keep
+        track of its ID so that it is not replaced by another.
 
-        # Draw tracking path
-        for i in range(1, len(track['positions'])):
-            cv2.line(frame, track['positions'][i - 1], track['positions'][i], (0, 255, 0), 2)
-    
-    return frame
-
-def save_tracking_results(tracks, output_file_path, frame_number):
-    """
-        Save the tracking results to the output file.
-        Format: <frame>, <id>, <bb_left>, <bb_top>, <bb_width>, <bb_height>, <conf>, <x>, <y>, <z>
         Parameters:
-            tracks: list of tracks
-            output_file_path: path to the output file
+            det_df: DataFrame containing the detections
+            tracks_history: dictionnary with as key the frame number and as value the list of tracks
             frame_number: current frame number
-        
+            nb_step: number of steps to look forward
+            sigma_iou: IoU threshold
+            conf_threshold: confidence threshold for the detections
     """
-    with open(output_file_path, 'a') as file:
-        for track in tracks:
-            x, y, w, h = track['box']
-            conf = track['conf']
-            id = track['id']
-            file.write(f'{frame_number},{id},{x},{y},{w},{h},{conf},-1,-1,-1\n')
+    if nb_step < 1:
+        raise ValueError('nb_step must be greater than 0')
+
+    if frame_number == 1:
+        # Loop over the detections with frame_number for nb_step
+        for i in range(frame_number, frame_number + nb_step):
+            # Get the detections for the current frame
+            current_detections = det_df[det_df['frame'] == i]
+            current_detections = current_detections[current_detections['conf'] >= conf_threshold]
+            current_boxes = current_detections[['bb_left', 'bb_top', 'bb_width', 'bb_height']].values
+            current_confidences = current_detections['conf'].values
+
+            if i == frame_number:
+                tracks_history[i] = []
+                for det, conf in zip(current_boxes, current_confidences):
+                    new_track = initialize_new_track(det, conf, i)
+                    tracks_history[i].append(new_track)
+            else:
+                for tracks_idx in range(frame_number, i):
+                    for track in tracks_history[tracks_idx]:
+                        track['kf'].predict()
+                
+                tracks = tracks_history[i - 1]
+                for j in range(frame_number, i):
+                    tracks.extend(tracks_history[j])
+                similarity_matrix = create_similarity_matrix(current_boxes, tracks)
+                print(f"frame {i}: {similarity_matrix.shape}, current_boxes x tracks")
+                # print(similarity_matrix)
+                matches, unmatched_detections, unmatched_tracks = associate_detections_to_tracks(similarity_matrix, sigma_iou)
+                tracks_history[i] = update_tracks(matches,
+                                                  unmatched_tracks,
+                                                  unmatched_detections,
+                                                  current_boxes,
+                                                  current_confidences,
+                                                  tracks_history[i - 1],
+                                                  i)
+
+    else:
+        # Current detections from last frame in the history
+        current_detections = det_df[det_df['frame'] == frame_number + nb_step - 1]
+        current_detections = current_detections[current_detections['conf'] >= conf_threshold]
+        current_boxes = current_detections[['bb_left', 'bb_top', 'bb_width', 'bb_height']].values
+        current_confidences = current_detections['conf'].values
+
+        last_track_idx = frame_number + nb_step - 2
+        for tracks_idx in range(frame_number, last_track_idx):
+            for track in tracks_history[tracks_idx]:
+                track['kf'].predict()
+
+        tracks = tracks_history[last_track_idx]        
+        for j in range(frame_number, frame_number + nb_step - 1):
+            tracks.extend(tracks_history[j])
+        similarity_matrix = create_similarity_matrix(current_boxes, tracks)
+        print(f"frame {frame_number + nb_step - 1}: {similarity_matrix.shape}, current_boxes x tracks")
+        matches, unmatched_detections, unmatched_tracks = associate_detections_to_tracks(similarity_matrix, sigma_iou)
+        print(f"matches: {len(matches)}, unmatched_detections: {len(unmatched_detections)}, unmatched_tracks: {len(unmatched_tracks)}")
+        tracks_history[frame_number + nb_step - 1] = update_tracks(matches,
+                                                                   unmatched_tracks,
+                                                                   unmatched_detections,
+                                                                   current_boxes,
+                                                                   current_confidences,
+                                                                   tracks_history[last_track_idx],
+                                                                   frame_number + nb_step - 1)
+        
+    
+    return tracks_history
