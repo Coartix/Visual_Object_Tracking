@@ -73,7 +73,6 @@ def associate_detections_to_tracks(similarity_matrix, sigma_iou):
     # Convert IoU similarity matrix to a cost matrix for the Hungarian algorithm
     cost_matrix = 1 - similarity_matrix
     det_indices, track_indices = linear_sum_assignment(cost_matrix)
-    print(f"det_indices: {len(det_indices)}, track_indices: {len(track_indices)}")
 
     matches = []
     unmatched_detections = list(range(similarity_matrix.shape[0]))
@@ -196,8 +195,6 @@ def look_forward(det_df,
                         tracks.append(track)
                 
                 similarity_matrix = create_similarity_matrix(current_boxes, tracks)
-                print(f"frame {i}: {similarity_matrix.shape}, current_boxes x tracks")
-                # print(similarity_matrix)
                 matches, unmatched_detections, unmatched_tracks = associate_detections_to_tracks(similarity_matrix, sigma_iou)
                 tracks_history[i] = update_tracks(matches,
                                                   unmatched_tracks,
@@ -225,9 +222,7 @@ def look_forward(det_df,
                 tracks.append(track)
 
         similarity_matrix = create_similarity_matrix(current_boxes, tracks)
-        print(f"frame {frame_number + nb_step - 1}: {similarity_matrix.shape}, current_boxes x tracks")
         matches, unmatched_detections, unmatched_tracks = associate_detections_to_tracks(similarity_matrix, sigma_iou)
-        print(f"matches: {len(matches)}, unmatched_detections: {len(unmatched_detections)}, unmatched_tracks: {len(unmatched_tracks)}")
         tracks_history[frame_number + nb_step - 1] = update_tracks(matches,
                                                                    unmatched_tracks,
                                                                    unmatched_detections,

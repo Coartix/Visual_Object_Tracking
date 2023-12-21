@@ -1,3 +1,4 @@
 *.pyc
-data/
+*.mp4
+data/img1/
 __pychache__

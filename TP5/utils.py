@@ -21,8 +21,6 @@ def init_model():
 
     # Define preprocessing for input images
     preprocess = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
@@ -88,19 +86,13 @@ def get_predicted_box(kf, w, h):
     x_center, y_center = predicted_state[0, 0], predicted_state[1, 0]
     return [x_center - w / 2, y_center - h / 2, w, h]
 
-def compute_similarity(iou_score, deep_features1, deep_features2, hist1, hist2):
+def compute_similarity(iou_score, deep_features1, deep_features2):
     """
         Compute the similarity between two detections.
     """
     deep_similarity = torch.nn.functional.cosine_similarity(deep_features1, deep_features2).item()
-    color_similarity = cv2.compareHist(hist1, hist2, cv2.HISTCMP_BHATTACHARYYA)
-        
-    #print(f"Deep similarity: {deep_similarity}")
-    #print(f"Color similarity: {color_similarity}")
-    #print(f"IoU similarity: {iou_score}")
-    #print(f"Combined similarity: {combined_similarity}")
-    #print("--------------------------------------------------")
-    return iou_score + (1 - iou_score) * (deep_similarity + color_similarity) / 2
+
+    return iou_score + (1 - iou_score) * deep_similarity * 0.714
 
 def create_similarity_matrix(current_detections, previous_tracks, frame):
     """
@@ -110,7 +102,6 @@ def create_similarity_matrix(current_detections, previous_tracks, frame):
     for i, current_det in enumerate(current_detections):
         # Extract features for the current detection
         deep_features1 = extract_deep_features(frame, current_det)
-        hist1 = extract_color_histogram(frame, current_det)
 
         for j, previous_track in enumerate(previous_tracks):
             predicted_box = get_predicted_box(previous_track['kf'], current_det[2], current_det[3])
@@ -118,9 +109,8 @@ def create_similarity_matrix(current_detections, previous_tracks, frame):
 
             # Use the stored features from the track
             deep_features2 = previous_track['deep_features']
-            hist2 = previous_track['color_histogram']
 
-            similarity_score = compute_similarity(iou_score, deep_features1, deep_features2, hist1, hist2)
+            similarity_score = compute_similarity(iou_score, deep_features1, deep_features2)
             similarity_matrix[i][j] = similarity_score
     return similarity_matrix
 
@@ -158,7 +148,6 @@ def initialize_new_track(det, conf, frame_number, frame):
     
     # Extract deep features and color histogram for the initial detection
     deep_features = extract_deep_features(frame, det)
-    color_histogram = extract_color_histogram(frame, det)
 
     new_track = {
         'id': next_track_id,
@@ -168,7 +157,7 @@ def initialize_new_track(det, conf, frame_number, frame):
         'positions': [(int(det[0] + det[2] / 2), int(det[1] + det[3] / 2))],
         'kf': kf,
         'deep_features': deep_features,
-        'color_histogram': color_histogram
+        #'color_histogram': color_histogram
     }
     next_track_id += 1
     return new_track
@@ -186,7 +175,6 @@ def update_track(track, det, conf, frame_number, frame):
 
     # Update deep features and color histogram for the track
     track['deep_features'] = extract_deep_features(frame, track['box'])
-    track['color_histogram'] = extract_color_histogram(frame, track['box'])
 
 def update_tracks(matches,
                   unmatched_tracks,
@@ -207,8 +195,6 @@ def update_tracks(matches,
             previous_tracks: list of previous tracks
             frame_number: current frame number
     """
-    global next_track_id
-
     # Update matched tracks with new detections
     for det_index, track_index in matches:
         det = current_detections[det_index]
