@@ -1,17 +1,24 @@
 import pandas as pd
-import os
 import numpy as np
 import cv2
-from scipy.optimize import linear_sum_assignment
-from KalmanFilter import KalmanFilter
-from PIL import Image
+import os
 import torch
 import torchvision.models as models
 import torchvision.transforms as transforms
 
+from scipy.optimize import linear_sum_assignment
+from KalmanFilter import KalmanFilter
+from copy import deepcopy
+from PIL import Image
+
+#### Global variables ####
+
 next_track_id = 1
 resnet_model = None
 preprocess = None
+deep_similarities = []
+
+#### Model to extract visual features from the detections ####
 
 def init_model():
     global resnet_model, preprocess
@@ -24,17 +31,6 @@ def init_model():
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
-
-def load_detections(det_file_path):
-    """
-        Load the detections from the detection file into a Pandas DataFrame.
-    """
-    # Define the column names for the DataFrame
-    columns = ['frame', 'id', 'bb_left', 'bb_top', 'bb_width', 'bb_height', 'conf', 'x', 'y', 'z']
-    
-    # Read the detection file into a DataFrame
-    df = pd.read_csv(det_file_path, header=None, names=columns)
-    return df
 
 def extract_deep_features(img, bbox):
     x, y, w, h = bbox
@@ -49,6 +45,8 @@ def extract_deep_features(img, bbox):
     with torch.no_grad():
         output = resnet_model(input_batch)
     return output
+
+#### IOU matching ####
 
 def track_iou(box1, box2):
     """
@@ -82,11 +80,16 @@ def compute_similarity(iou_score, deep_features1, deep_features2):
     """
     deep_similarity = torch.nn.functional.cosine_similarity(deep_features1, deep_features2).item()
 
-    return iou_score + (1 - iou_score) * deep_similarity * 0.714
+    deep_similarities.append(iou_score * deep_similarity)
+    return iou_score * deep_similarity
+
 
 def create_similarity_matrix(current_detections, previous_tracks, frame):
     """
-        Create a similarity matrix between the current detections and the previous tracks.
+        Create the similarity matrix between the current detections and the previous tracks.
+        Parameters:
+            current_detections: list of current detections
+            previous_tracks: list of previous tracks
     """
     similarity_matrix = np.zeros((len(current_detections), len(previous_tracks)))
     for i, current_det in enumerate(current_detections):
@@ -104,13 +107,12 @@ def create_similarity_matrix(current_detections, previous_tracks, frame):
             similarity_matrix[i][j] = similarity_score
     return similarity_matrix
 
-
 def associate_detections_to_tracks(similarity_matrix, sigma=0.5):
     """
         Associate the detections to the tracks.
         Parameters:
-            similarity_matrix: similarity matrix between the current detections and the previous tracks
-            sigma_iou: IoU threshold
+            similarity_matrix: similarity matrix between the current detections and the previous tracks            sigma_iou: IoU threshold
+            sigma: Similarity threshold
     """
     if similarity_matrix.size == 0:
         return [], list(range(similarity_matrix.shape[0])), list(range(similarity_matrix.shape[1]))
@@ -132,13 +134,20 @@ def associate_detections_to_tracks(similarity_matrix, sigma=0.5):
     return matches, unmatched_detections, unmatched_tracks
 
 def initialize_new_track(det, conf, frame_number, frame):
+    """
+        Initialize a new track.
+        Parameters:
+            det: detection
+            conf: confidence of the detection
+            frame_number: current frame number
+            frame: current frame
+    """
     global next_track_id
     kf = KalmanFilter()
     kf.x = np.matrix([[det[0] + det[2] / 2], [det[1] + det[3] / 2], [0], [0]])
-    
+
     # Extract deep features and color histogram for the initial detection
     deep_features = extract_deep_features(frame, det)
-
     new_track = {
         'id': next_track_id,
         'box': det,
@@ -146,8 +155,7 @@ def initialize_new_track(det, conf, frame_number, frame):
         'frames': [frame_number],
         'positions': [(int(det[0] + det[2] / 2), int(det[1] + det[3] / 2))],
         'kf': kf,
-        'deep_features': deep_features,
-        #'color_histogram': color_histogram
+        'deep_features': deep_features
     }
     next_track_id += 1
     return new_track
@@ -155,7 +163,6 @@ def initialize_new_track(det, conf, frame_number, frame):
 def update_track(track, det, conf, frame_number, frame):
     # Update Kalman Filter with the new detection
     track['kf'].update([det[0] + det[2] / 2, det[1] + det[3] / 2])
-    
     # Update the track's state with the Kalman Filter's state
     estimated_pos = track['kf'].x[:2]
     track['box'] = [estimated_pos[0, 0] - det[2] / 2, estimated_pos[1, 0] - det[3] / 2, det[2], det[3]]
@@ -173,7 +180,7 @@ def update_tracks(matches,
                   current_confidences,
                   previous_tracks,
                   frame_number,
-                  frame):
+                    frame):
     """
         Update the tracks based on the matches and unmatched detections.
         Parameters:
@@ -204,40 +211,98 @@ def update_tracks(matches,
 
     return previous_tracks
 
-def draw_tracking_result(frame, tracks):
-    """
-        Draw the tracking result on the frame.
-        Parameters:
-            frame: current frame
-            tracks: list of tracks
-    """
-    for track in tracks:
-        # Draw bounding box and ID
-        x, y, w, h = track['box']
-        conf = track['conf']
-        cv2.rectangle(frame, (int(x), int(y)), (int(x + w), int(y + h)), (0, 255, 255), 2)
-        label = f'ID: {track["id"]}, Conf: {conf:.2f}'
-        cv2.putText(frame, label, (int(x), int(y)), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 255), 2, cv2.LINE_AA)
+#### Forward tracking ####
 
-        # Draw tracking path
-        for i in range(1, len(track['positions'])):
-            cv2.line(frame, track['positions'][i - 1], track['positions'][i], (0, 255, 0), 2)
-    
-    return frame
-
-def save_tracking_results(tracks, output_file_path, frame_number):
+def look_forward(det_df,
+                 tracks_history,
+                 frame_number,
+                 frame,
+                 frames_path,
+                 nb_step = 10,
+                 sigma = 0.5,
+                 conf_threshold = 20.0):
     """
-        Save the tracking results to the output file.
-        Format: <frame>, <id>, <bb_left>, <bb_top>, <bb_width>, <bb_height>, <conf>, <x>, <y>, <z>
+        Perform tracking on the given detection file, the goal of looking forward
+        is to predict the position of the detected objects in the future and keep
+        track of its ID so that it is not replaced by another.
+
         Parameters:
-            tracks: list of tracks
-            output_file_path: path to the output file
+            det_df: DataFrame containing the detections
+            tracks_history: dictionnary with as key the frame number and as value the list of tracks
             frame_number: current frame number
-        
+            frame: current frame
+            frames_path: path to the folder containing the frames
+            nb_step: number of steps to look forward
+            sigma_iou: IoU threshold
+            conf_threshold: confidence threshold for the detections
     """
-    with open(output_file_path, 'a') as file:
-        for track in tracks:
-            x, y, w, h = track['box']
-            conf = track['conf']
-            id = track['id']
-            file.write(f'{frame_number},{id},{x},{y},{w},{h},{conf},-1,-1,-1\n')
+    if nb_step < 1:
+        raise ValueError('nb_step must be greater than 0')
+
+    if frame_number == 1:
+        # Loop over the first nb_step images
+        for i, frame_filename in enumerate(sorted(os.listdir(frames_path))[:nb_step], start=1):
+            frame_path = os.path.join(frames_path, frame_filename)
+            frame = cv2.imread(frame_path)
+
+            # Get the detections for the current frame
+            current_detections = det_df[det_df['frame'] == i]
+            current_detections = current_detections[current_detections['conf'] >= conf_threshold]
+            current_boxes = current_detections[['bb_left', 'bb_top', 'bb_width', 'bb_height']].values
+            current_confidences = current_detections['conf'].values
+
+            if i == frame_number:
+                tracks_history[i] = []
+                for det, conf in zip(current_boxes, current_confidences):
+                    new_track = initialize_new_track(det, conf, i, frame)
+                    tracks_history[i].append(new_track)
+            else:
+                for tracks_idx in range(frame_number, i):
+                    for track in tracks_history[tracks_idx]:
+                        track['kf'].predict()
+                
+                tracks = deepcopy(tracks_history[i - 1])
+                for j in range(frame_number, i):
+                    for track in tracks_history[j]:
+                        tracks.append(track)
+                
+                similarity_matrix = create_similarity_matrix(current_boxes, tracks, frame)
+                matches, unmatched_detections, unmatched_tracks = associate_detections_to_tracks(similarity_matrix, sigma)
+                tracks_history[i] = update_tracks(matches,
+                                                  unmatched_tracks,
+                                                  unmatched_detections,
+                                                  current_boxes,
+                                                  current_confidences,
+                                                  tracks,
+                                                  i,
+                                                  frame)
+
+    else:
+        # Current detections from last frame in the history
+        current_detections = det_df[det_df['frame'] == frame_number + nb_step - 1]
+        current_detections = current_detections[current_detections['conf'] >= conf_threshold]
+        current_boxes = current_detections[['bb_left', 'bb_top', 'bb_width', 'bb_height']].values
+        current_confidences = current_detections['conf'].values
+
+        last_track_idx = frame_number + nb_step - 2
+        for tracks_idx in range(frame_number, last_track_idx):
+            for track in tracks_history[tracks_idx]:
+                track['kf'].predict()
+
+        tracks = deepcopy(tracks_history[last_track_idx])     
+        for j in range(frame_number, frame_number + nb_step - 1):
+            for track in tracks_history[j]:
+                tracks.append(track)
+
+        similarity_matrix = create_similarity_matrix(current_boxes, tracks, frame)
+        matches, unmatched_detections, unmatched_tracks = associate_detections_to_tracks(similarity_matrix, sigma)
+        tracks_history[frame_number + nb_step - 1] = update_tracks(matches,
+                                                                   unmatched_tracks,
+                                                                   unmatched_detections,
+                                                                   current_boxes,
+                                                                   current_confidences,
+                                                                   tracks,
+                                                                   frame_number + nb_step - 1,
+                                                                   frame)
+    print(np.mean(deep_similarities))
+    return tracks_history
