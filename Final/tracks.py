@@ -16,7 +16,6 @@ from PIL import Image
 next_track_id = 1
 resnet_model = None
 preprocess = None
-deep_similarities = []
 
 #### Model to extract visual features from the detections ####
 
@@ -79,8 +78,6 @@ def compute_similarity(iou_score, deep_features1, deep_features2):
         Compute the similarity between two detections.
     """
     deep_similarity = torch.nn.functional.cosine_similarity(deep_features1, deep_features2).item()
-
-    deep_similarities.append(iou_score * deep_similarity)
     return iou_score * deep_similarity
 
 
@@ -160,7 +157,17 @@ def initialize_new_track(det, conf, frame_number, frame):
     next_track_id += 1
     return new_track
 
-def update_track(track, det, conf, frame_number, frame):
+def update_track(track, det, conf, frame_number, frame, similarity_score):
+    """
+        Update an existing track.
+        Parameters:
+            track: track to update
+            det: detection
+            conf: confidence of the detection
+            frame_number: current frame number
+            frame: current frame
+            similarity_score: similarity score between the detection and the track
+    """
     # Update Kalman Filter with the new detection
     track['kf'].update([det[0] + det[2] / 2, det[1] + det[3] / 2])
     # Update the track's state with the Kalman Filter's state
@@ -169,11 +176,13 @@ def update_track(track, det, conf, frame_number, frame):
     track['frames'].append(frame_number)
     track['positions'].append((int(estimated_pos[0, 0]), int(estimated_pos[1, 0])))
     track['conf'] = conf
+    track['similarity_score'] = similarity_score
 
     # Update deep features for the track
     track['deep_features'] = extract_deep_features(frame, track['box'])
 
-def update_tracks(matches,
+def update_tracks(similarity_matrix,
+                  matches,
                   unmatched_tracks,
                   unmatched_detections,
                   current_detections,
@@ -184,6 +193,7 @@ def update_tracks(matches,
     """
         Update the tracks based on the matches and unmatched detections.
         Parameters:
+            similarity_matrix: similarity matrix between the current detections and the previous tracks
             matches: list of matched detections and tracks
             unmatched_tracks: list of unmatched tracks
             unmatched_detections: list of unmatched detections
@@ -197,7 +207,8 @@ def update_tracks(matches,
     for det_index, track_index in matches:
         det = current_detections[det_index]
         conf = current_confidences[det_index]
-        update_track(previous_tracks[track_index], det, conf, frame_number, frame)
+        similarity_score = similarity_matrix[det_index, track_index]
+        update_track(previous_tracks[track_index], det, conf, frame_number, frame, similarity_score)
 
     # Handle unmatched detections (new tracks)
     for det_index in unmatched_detections:
@@ -261,14 +272,18 @@ def look_forward(det_df,
                     for track in tracks_history[tracks_idx]:
                         track['kf'].predict()
                 
-                tracks = deepcopy(tracks_history[i - 1])
-                for j in range(frame_number, i):
-                    for track in tracks_history[j]:
-                        tracks.append(track)
+                unique_tracks = {}
+                for j in range(i, frame_number, -1):
+                    for track in tracks_history.get(j, []):
+                        if track['id'] not in unique_tracks:
+                            unique_tracks[track['id']] = track
+
+                tracks = list(unique_tracks.values())
                 
                 similarity_matrix = create_similarity_matrix(current_boxes, tracks, frame)
                 matches, unmatched_detections, unmatched_tracks = associate_detections_to_tracks(similarity_matrix, sigma)
-                tracks_history[i] = update_tracks(matches,
+                tracks_history[i] = update_tracks(similarity_matrix,
+                                                  matches,
                                                   unmatched_tracks,
                                                   unmatched_detections,
                                                   current_boxes,
@@ -289,14 +304,20 @@ def look_forward(det_df,
             for track in tracks_history[tracks_idx]:
                 track['kf'].predict()
 
-        tracks = deepcopy(tracks_history[last_track_idx])     
-        for j in range(frame_number, frame_number + nb_step - 1):
-            for track in tracks_history[j]:
-                tracks.append(track)
+        # Collect the most recent unique tracks
+        unique_tracks = {}
+        for j in range(frame_number + nb_step - 1, frame_number - 1, -1):
+            for track in tracks_history.get(j, []):
+                if track['id'] not in unique_tracks:
+                    unique_tracks[track['id']] = track
+
+        # Convert the unique_tracks dictionary to a list
+        tracks = list(unique_tracks.values())
 
         similarity_matrix = create_similarity_matrix(current_boxes, tracks, frame)
         matches, unmatched_detections, unmatched_tracks = associate_detections_to_tracks(similarity_matrix, sigma)
-        tracks_history[frame_number + nb_step - 1] = update_tracks(matches,
+        tracks_history[frame_number + nb_step - 1] = update_tracks(similarity_matrix,
+                                                                   matches,
                                                                    unmatched_tracks,
                                                                    unmatched_detections,
                                                                    current_boxes,
@@ -304,5 +325,4 @@ def look_forward(det_df,
                                                                    tracks,
                                                                    frame_number + nb_step - 1,
                                                                    frame)
-    print(np.mean(deep_similarities))
     return tracks_history

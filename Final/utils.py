@@ -2,6 +2,11 @@ import pandas as pd
 import os
 import numpy as np
 import cv2
+import random
+
+def get_color_by_id(track_id):
+    random.seed(track_id)
+    return (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
 
 def load_detections(det_file_path):
     """
@@ -16,24 +21,28 @@ def load_detections(det_file_path):
 
 def draw_tracking_result(frame, tracks):
     """
-        Draw the tracking result on the frame.
-        Parameters:
-            frame: current frame
-            tracks: list of tracks
+    Draw the tracking result on the frame.
+    Parameters:
+        frame: current frame
+        tracks: list of tracks
     """
     for track in tracks:
+        # Generate a distinct color for each track ID
+        track_color = get_color_by_id(track['id'])
+
         # Draw bounding box and ID
         x, y, w, h = track['box']
-        conf = track['conf']
-        cv2.rectangle(frame, (int(x), int(y)), (int(x + w), int(y + h)), (0, 255, 255), 2)
-        label = f'ID: {track["id"]}, Conf: {conf:.2f}'
-        cv2.putText(frame, label, (int(x), int(y)), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 255), 2, cv2.LINE_AA)
+        similarity_score = track.get('similarity_score', 0)  # Get the stored similarity score
+        label = f'ID: {track["id"]}, Score: {similarity_score:.2f}'  # Display the similarity score
+        cv2.rectangle(frame, (int(x), int(y)), (int(x + w), int(y + h)), track_color, 2)
+        cv2.putText(frame, label, (int(x), int(y)), cv2.FONT_HERSHEY_SIMPLEX, 0.75, track_color, 2, cv2.LINE_AA)
 
         # Draw tracking path
         for i in range(1, len(track['positions'])):
-            cv2.line(frame, track['positions'][i - 1], track['positions'][i], (0, 255, 0), 2)
+            cv2.line(frame, track['positions'][i - 1], track['positions'][i], track_color, 2)
     
     return frame
+
 
 def save_tracking_results(tracks, output_file_path, frame_number):
     """
