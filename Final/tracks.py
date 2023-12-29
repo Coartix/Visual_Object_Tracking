@@ -16,22 +16,29 @@ from PIL import Image
 next_track_id = 1
 resnet_model = None
 preprocess = None
+use_resnet = True
 
 #### Model to extract visual features from the detections ####
 
-def init_model():
-    global resnet_model, preprocess
-    # Load pre-trained ResNet
-    resnet_model = models.resnet18(pretrained=True)
-    resnet_model.eval()  # Set to evaluation mode
+def init_model(apply_resnet):
+    global resnet_model, preprocess, use_resnet
+    if apply_resnet:
+        # Load pre-trained ResNet
+        resnet_model = models.resnet18(pretrained=True)
+        resnet_model.eval()  # Set to evaluation mode
 
-    # Define preprocessing for input images
-    preprocess = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
+        # Define preprocessing for input images
+        preprocess = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+    else:
+        use_resnet = False
 
 def extract_deep_features(img, bbox):
+    if not use_resnet:
+        return None
+    
     x, y, w, h = bbox
     crop_img = img[int(y):int(y+h), int(x):int(x+w)]
     if crop_img.size == 0:
@@ -73,13 +80,50 @@ def get_predicted_box(kf, w, h):
     x_center, y_center = predicted_state[0, 0], predicted_state[1, 0]
     return [x_center - w / 2, y_center - h / 2, w, h]
 
-def compute_similarity(iou_score, deep_features1, deep_features2):
+def direction_similarity(predicted_pos, current_detection, track_velocity):
+    """
+    Calculate a bonus similarity based on whether the track's predicted movement
+    is toward the current detection.
+
+    :param predicted_pos: Predicted position of the track.
+    :param current_detection: Current detection position.
+    :param track_velocity: Velocity of the track from the Kalman Filter.
+    :return: Bonus similarity score.
+    """
+    # Check if track is stationary
+    if track_velocity[0] == 0 and track_velocity[1] == 0:
+        return 0
+    
+    # Calculate direction vectors
+    direction_to_detection = np.array([current_detection[0] - predicted_pos[0],
+                                       current_detection[1] - predicted_pos[1]])
+    direction_norm = np.linalg.norm(direction_to_detection)
+    if direction_norm == 0:
+        return 0
+    # Normalize direction vector
+    direction_to_detection = direction_to_detection / direction_norm
+
+    # Normalize track velocity
+    velocity_norm = np.linalg.norm(track_velocity)
+    if velocity_norm == 0:
+        return 0
+    track_direction = track_velocity / velocity_norm
+
+    # Calculate cosine similarity between directions
+    cosine_similarity = np.dot(direction_to_detection, track_direction)
+
+    return cosine_similarity.item() # Can be positive or negative
+
+def compute_similarity(iou_score, deep_features1, deep_features2, velocity_similarity):
     """
         Compute the similarity between two detections.
     """
-    deep_similarity = torch.nn.functional.cosine_similarity(deep_features1, deep_features2).item()
-    return iou_score * deep_similarity
-
+    sim = 0.1 if velocity_similarity > 0.8 else -0.1 if velocity_similarity < -0.7 else 0
+    if use_resnet:
+        deep_similarity = torch.nn.functional.cosine_similarity(deep_features1, deep_features2).item()
+        return max(0, min(1, (iou_score + deep_similarity * 0.5 + sim))) # Resnet not working well
+    else:
+        return max(0, min(1, iou_score + sim))
 
 def create_similarity_matrix(current_detections, previous_tracks, frame):
     """
@@ -100,7 +144,14 @@ def create_similarity_matrix(current_detections, previous_tracks, frame):
             # Use the stored features from the track
             deep_features2 = previous_track['deep_features']
 
-            similarity_score = compute_similarity(iou_score, deep_features1, deep_features2)
+            # Calculate direction similarity
+            track_velocity = previous_track['kf'].x[2:4]
+            velocity_similarity = direction_similarity(predicted_box[:2], current_det[:2], track_velocity)
+            # print(velocity_similarity)
+            # velocity_similarity = 0
+
+            similarity_score = compute_similarity(iou_score, deep_features1, deep_features2, velocity_similarity)
+            # print(similarity_score)
             similarity_matrix[i][j] = similarity_score
     return similarity_matrix
 
@@ -172,7 +223,7 @@ def update_track(track, det, conf, frame_number, frame, similarity_score):
     track['kf'].update([det[0] + det[2] / 2, det[1] + det[3] / 2])
     # Update the track's state with the Kalman Filter's state
     estimated_pos = track['kf'].x[:2]
-    track['box'] = [estimated_pos[0, 0] - det[2] / 2, estimated_pos[1, 0] - det[3] / 2, det[2], det[3]]
+    track['box'] = [det[0], det[1], det[2], det[3]]
     track['frames'].append(frame_number)
     track['positions'].append((int(estimated_pos[0, 0]), int(estimated_pos[1, 0])))
     track['conf'] = conf
@@ -271,7 +322,7 @@ def look_forward(det_df,
                 for tracks_idx in range(frame_number, i):
                     for track in tracks_history[tracks_idx]:
                         track['kf'].predict()
-                
+
                 unique_tracks = {}
                 for j in range(i, frame_number, -1):
                     for track in tracks_history.get(j, []):
@@ -291,7 +342,6 @@ def look_forward(det_df,
                                                   tracks,
                                                   i,
                                                   frame)
-
     else:
         # Current detections from last frame in the history
         current_detections = det_df[det_df['frame'] == frame_number + nb_step - 1]
@@ -325,4 +375,5 @@ def look_forward(det_df,
                                                                    tracks,
                                                                    frame_number + nb_step - 1,
                                                                    frame)
+        
     return tracks_history

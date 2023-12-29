@@ -1,0 +1,18 @@
+# Variables for video processing
+image_frames_path: "../data/img1/"
+fps: 30
+frame_size:
+  - 1920
+  - 1080
+fourcc: "mp4v"
+output_video: "data/output_with_tracking.mp4"
+tracking_file: "data/track.txt"
+det_file_path: "../data/det/preprocessed_det.txt" # "../data/gt/gt.txt"
+
+# Parameters for tracking algorithm
+CONF_THRESH: 35.0
+sigma: 0.2
+nb_step: 12
+
+# Booleans deciding what to use
+use_resnet: false

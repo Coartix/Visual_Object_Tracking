@@ -17,6 +17,7 @@ def load_detections(det_file_path):
     
     # Read the detection file into a DataFrame
     df = pd.read_csv(det_file_path, header=None, names=columns)
+    df['conf'] = df['conf'].astype(float)
     return df
 
 def draw_tracking_result(frame, tracks):
@@ -57,6 +58,6 @@ def save_tracking_results(tracks, output_file_path, frame_number):
     with open(output_file_path, 'a') as file:
         for track in tracks:
             x, y, w, h = track['box']
-            conf = track['conf']
+            conf = track['conf'] # 1
             id = track['id']
             file.write(f'{frame_number},{id},{x},{y},{w},{h},{conf},-1,-1,-1\n')
