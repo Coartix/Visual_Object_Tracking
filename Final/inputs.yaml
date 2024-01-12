@@ -10,9 +10,9 @@ tracking_file: "data/track.txt"
 det_file_path: "../data/det/preprocessed_det.txt" # "../data/gt/gt.txt"
 
 # Parameters for tracking algorithm
-CONF_THRESH: 35.0
-sigma: 0.2
-nb_step: 12
+CONF_THRESH: 40.0
+sigma: 0.5
+nb_step: 6
 
 # Booleans deciding what to use
-use_resnet: false
+use_resnet: true

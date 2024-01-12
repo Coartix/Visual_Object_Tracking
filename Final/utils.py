@@ -58,6 +58,6 @@ def save_tracking_results(tracks, output_file_path, frame_number):
     with open(output_file_path, 'a') as file:
         for track in tracks:
             x, y, w, h = track['box']
-            conf = track['conf'] # 1
+            conf = 1 #track['conf']
             id = track['id']
             file.write(f'{frame_number},{id},{x},{y},{w},{h},{conf},-1,-1,-1\n')

@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 import yaml
 import sys
+import time
 
 from utils import draw_tracking_result, save_tracking_results, load_detections
 from tracks import track_iou, create_similarity_matrix, associate_detections_to_tracks, update_tracks, initialize_new_track, look_forward, init_model
@@ -37,11 +38,16 @@ def main(config_path):
     else:
         open(config['tracking_file'], 'x')
 
+    total_time = 0  # Variable to store total processing time
+    total_frames = 0  # Variable to store total number of frames processed
+
     #### Process each image frame ####
     for filename in sorted(os.listdir(config['image_frames_path'])):
         if filename.endswith(".jpg"):
             frame_path = os.path.join(config['image_frames_path'], filename)
             frame = cv2.imread(frame_path)
+
+            start_time = time.time()
 
             tracks_history = look_forward(
                 detections_df,
@@ -53,6 +59,11 @@ def main(config_path):
                 sigma=config['sigma'],
                 conf_threshold=config['CONF_THRESH']
             )
+
+            end_time = time.time()
+            frame_time = end_time - start_time
+            total_time += frame_time
+            total_frames += 1
 
             frame_with_tracking = draw_tracking_result(frame, tracks_history[frame_number])
             save_tracking_results(tracks_history[frame_number], config['tracking_file'], frame_number)
@@ -67,6 +78,12 @@ def main(config_path):
     # Release resources
     out.release()
     cv2.destroyAllWindows()
+
+    if total_time > 0:
+        mean_fps = total_frames / total_time
+        print("Mean FPS over the entire computation: {:.2f}".format(mean_fps))
+    else:
+        print("No frames were processed.")
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:

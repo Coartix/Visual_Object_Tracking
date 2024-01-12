@@ -17,6 +17,7 @@ next_track_id = 1
 resnet_model = None
 preprocess = None
 use_resnet = True
+feature_size = 128
 
 #### Model to extract visual features from the detections ####
 
@@ -25,13 +26,16 @@ def init_model(apply_resnet):
     if apply_resnet:
         # Load pre-trained ResNet
         resnet_model = models.resnet18(pretrained=True)
-        resnet_model.eval()  # Set to evaluation mode
+        
+        # Replace the last fully-connected layer to output the desired feature size
+        # Note: resnet_model.fc.in_features gives the number of features input to the last layer
+        resnet_model.fc = torch.nn.Linear(resnet_model.fc.in_features, feature_size)
+        
+        # Set to evaluation mode
+        resnet_model.eval()
 
         # Define preprocessing for input images
-        preprocess = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
+        preprocess = models.ResNet18_Weights.IMAGENET1K_V1.transforms()
     else:
         use_resnet = False
 
@@ -42,7 +46,7 @@ def extract_deep_features(img, bbox):
     x, y, w, h = bbox
     crop_img = img[int(y):int(y+h), int(x):int(x+w)]
     if crop_img.size == 0:
-        return torch.zeros((1, 1000))  # Size depends on the model's output features
+        return torch.zeros((1, feature_size))  # Size depends on the model's output features
     crop_img = cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB)
     crop_img = Image.fromarray(crop_img)
     input_tensor = preprocess(crop_img)
@@ -121,7 +125,7 @@ def compute_similarity(iou_score, deep_features1, deep_features2, velocity_simil
     sim = 0.1 if velocity_similarity > 0.8 else -0.1 if velocity_similarity < -0.7 else 0
     if use_resnet:
         deep_similarity = torch.nn.functional.cosine_similarity(deep_features1, deep_features2).item()
-        return max(0, min(1, (iou_score + deep_similarity * 0.5 + sim))) # Resnet not working well
+        return max(0, min(1, (iou_score + deep_similarity * 0.5 + sim)))
     else:
         return max(0, min(1, iou_score + sim))
 
@@ -147,11 +151,8 @@ def create_similarity_matrix(current_detections, previous_tracks, frame):
             # Calculate direction similarity
             track_velocity = previous_track['kf'].x[2:4]
             velocity_similarity = direction_similarity(predicted_box[:2], current_det[:2], track_velocity)
-            # print(velocity_similarity)
-            # velocity_similarity = 0
 
             similarity_score = compute_similarity(iou_score, deep_features1, deep_features2, velocity_similarity)
-            # print(similarity_score)
             similarity_matrix[i][j] = similarity_score
     return similarity_matrix
 
